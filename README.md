@@ -1,184 +1,171 @@
-# pyspark-credit-risk-scoring
-PySpark-based credit scoring project simulating DE AM-level workflows and DQ checks. Implements end-to-end data pipeline and classification models (RF, GBT, LR) to assess credit risk exposure. Emphasizes scalable feature engineering and model evaluation.
+# PySpark Credit Risk Scoring Model
 
-## Overview
+This repository contains a PySpark-based pipeline for credit risk scoring. The model uses a variety of machine learning classifiers, including Random Forest, Gradient Boosted Trees, and Logistic Regression, to predict whether a person is at risk of serious delinquency in the next two years based on financial features. The project leverages PySpark for distributed data processing and machine learning.
 
-This repository contains a PySpark-based machine learning pipeline designed to predict credit scores using a dataset with features related to financial and demographic information. The pipeline includes data loading, preprocessing, feature engineering, model training, and evaluation, with a focus on data quality (DQ) checks to ensure the reliability of the dataset before training.
+## Project Overview
 
-## Table of Contents
+* **Objective**: Predict the likelihood of a person experiencing serious delinquency within the next 2 years based on historical financial data.
+* **Technology**: PySpark, Machine Learning, SQL, Data Engineering
+* **Dataset**: The model is built using the Kaggle "Give Me Some Credit" dataset.
 
-* [Project Setup](#project-setup)
-* [Code Walkthrough](#code-walkthrough)
+## Prerequisites
 
-  * [1. Data Loading](#1-data-loading)
-  * [2. Data Preprocessing](#2-data-preprocessing)
-  * [3. Data Quality (DQ) Checks](#3-data-quality-dq-checks)
-  * [4. Feature Engineering](#4-feature-engineering)
-  * [5. Model Training](#5-model-training)
-  * [6. Model Evaluation](#6-model-evaluation)
-* [Dependencies](#dependencies)
-* [Usage](#usage)
+Before running the code, ensure that you have the following installed:
 
-## Project Setup
-
-Before you start, ensure that you have the necessary dependencies installed. You can install them using the following:
+* **Apache Spark**: Set up a Spark cluster (local or distributed).
+* **PySpark**: The Python API for Spark.
 
 ```bash
-pip install -r requirements.txt
+pip install pyspark
 ```
 
-## Code Walkthrough
+## Step-by-Step Implementation
 
-### 1. Data Loading
-
-We begin by loading the raw credit scoring data into a PySpark DataFrame. This step involves reading the data from a CSV file or any other compatible data source.
+### 1. Initialize Spark Context and HiveContext
 
 ```python
-from pyspark.sql import SparkSession
+from pyspark.sql import HiveContext
+from pyspark import SparkContext
 
-# Initialize Spark session
-spark = SparkSession.builder.appName("CreditScoringPipeline").getOrCreate()
-
-# Load the dataset
-data_path = "path_to_data.csv"
-df = spark.read.csv(data_path, header=True, inferSchema=True)
-df.show(5)
+sc = SparkContext()
+hc = HiveContext(sc)
+print(hc)
 ```
 
-**Explanation**:
-We initialize a Spark session and load the data from a CSV file, inferring the schema for automatic data type detection. The `show()` method is used to preview the first few rows of the dataset.
+### 2. Data Loading
 
-### 2. Data Preprocessing
-
-In this step, we clean the data by handling missing values and performing necessary transformations.
+We begin by downloading and loading the data into a distributed data frame using a custom CSV parser. The data file is fetched from a remote URL:
 
 ```python
-from pyspark.sql.functions import col
+import os
 
-# Handle missing values by filling with a default value or dropping rows
-df_cleaned = df.fillna({"column_name": "default_value"})
+DATA_FILE_NAME = 'CreditScoring.csv'
+DATA_URL = 'https://raw.githubusercontent.com/ChicagoBoothML/DATA___Kaggle___GiveMeSomeCredit/master/%s' % DATA_FILE_NAME
+os.system('curl %s --output %s' % (DATA_URL, DATA_FILE_NAME))
 
-# Convert categorical columns to numeric using StringIndexer or OneHotEncoder
-from pyspark.ml.feature import StringIndexer
-indexer = StringIndexer(inputCol="categorical_column", outputCol="indexed_column")
-df_cleaned = indexer.fit(df_cleaned).transform(df_cleaned)
-
-df_cleaned.show(5)
+# Load CSV data into a distributed data frame
+from pyspark_csv import csvToDataFrame
+credit_scoring_ddf = csvToDataFrame(
+    sqlCtx=hc,
+    rdd=sc.textFile(DATA_FILE_NAME),
+    columns=None,
+    sep=',',
+    parseDate=True
+).cache()
+credit_scoring_ddf.registerTempTable('credit_scoring')
+credit_scoring_ddf.printSchema()
 ```
 
-**Explanation**:
+### 3. Data Preprocessing
 
-* Missing values are handled using `fillna()`, where we specify default values for columns with missing data.
-* We use the `StringIndexer` to convert categorical variables into numeric indices, which is necessary for machine learning algorithms.
-
-### 3. Data Quality (DQ) Checks
-
-Before proceeding with the analysis, it’s essential to ensure the quality of the data by checking for inconsistencies or outliers.
+We process the data by removing redundant columns, converting labels to strings, and ensuring all numerical columns are of type `DoubleType`.
 
 ```python
-# Check for duplicate rows
-df_cleaned = df_cleaned.dropDuplicates()
-
-# Check for missing values after imputation
-missing_values = df_cleaned.select([col(c).isNull().alias(c) for c in df_cleaned.columns]).agg({"*": "sum"})
-missing_values.show()
-
-# Data quality checks: Range checks for numerical columns
-df_cleaned.filter((col("age") < 18) | (col("age") > 100)).show()
+credit_scoring_ddf = hc.sql(
+    """
+    SELECT 
+        CASE WHEN SeriousDlqin2yrs > 0 THEN 'yes' ELSE 'no' END AS SeriousDlqin2yrs,
+        CAST(RevolvingUtilizationOfUnsecuredLines AS DOUBLE) AS RevolvingUtilizationOfUnsecuredLines,
+        CAST(age AS DOUBLE) AS age,
+        CAST(NumberOfTime30-59DaysPastDueNotWorse AS DOUBLE) AS NumberOfTime30-59DaysPastDueNotWorse,
+        CAST(DebtRatio AS DOUBLE) AS DebtRatio,
+        CAST(MonthlyIncome AS DOUBLE) AS MonthlyIncome,
+        CAST(NumberOfOpenCreditLinesAndLoans AS DOUBLE) AS NumberOfOpenCreditLinesAndLoans,
+        CAST(NumberOfTimes90DaysLate AS DOUBLE) AS NumberOfTimes90DaysLate,
+        CAST(NumberRealEstateLoansOrLines AS DOUBLE) AS NumberRealEstateLoansOrLines,
+        CAST(NumberOfTime60-89DaysPastDueNotWorse AS DOUBLE) AS NumberOfTime60-89DaysPastDueNotWorse,
+        CAST(NumberOfDependents AS DOUBLE) AS NumberOfDependents
+    FROM credit_scoring
+    """
+).cache()
+credit_scoring_ddf.registerTempTable('credit_scoring')
+credit_scoring_ddf.printSchema()
 ```
 
-**Explanation**:
+### 4. Data Splitting
 
-* Duplicates are removed using `dropDuplicates()`.
-* We verify if there are any remaining missing values after handling them by inspecting the sum of nulls in each column.
-* We perform range checks for numerical columns (e.g., age should be between 18 and 100).
-
-### 4. Feature Engineering
-
-Feature engineering is crucial to improve model performance. Here, we create new features or transform existing ones based on domain knowledge.
+We split the data into training and testing sets:
 
 ```python
-from pyspark.ml.feature import VectorAssembler
+credit_scoring_train_ddf, credit_scoring_test_ddf = credit_scoring_ddf.randomSplit(
+    weights=[.3, .7], seed=99
+)
 
-# Assemble feature vector for model input
-feature_columns = ["age", "income", "credit_history"]
-assembler = VectorAssembler(inputCols=feature_columns, outputCol="features")
-df_features = assembler.transform(df_cleaned)
-
-df_features.select("features").show(5)
+credit_scoring_train_ddf.cache()
+credit_scoring_test_ddf.cache()
 ```
 
-**Explanation**:
-The `VectorAssembler` is used to combine multiple feature columns (such as `age`, `income`, `credit_history`) into a single feature vector, which is required by most PySpark machine learning algorithms.
+### 5. Model Pipeline Construction
 
-### 5. Model Training
+We create a pipeline for each classifier:
 
-We now split the data into training and testing datasets and train a machine learning model, such as Logistic Regression.
+#### Random Forest Classifier
+
+```python
+from pyspark.ml.classification import RandomForestClassifier
+from pyspark.ml import Pipeline
+from pyspark.ml.feature import VectorAssembler, StringIndexer
+
+# Feature assembler
+feature_vector_assembler = VectorAssembler(inputCols=X_var_names, outputCol='features')
+
+# Random Forest classifier
+rf_classifier = RandomForestClassifier(
+    featuresCol='features',
+    labelCol='SeriousDlqin2yrs_idx',
+    numTrees=100,
+    maxDepth=5
+)
+
+rf_pipeline = Pipeline(stages=[feature_vector_assembler, label_string_indexer, rf_classifier])
+rf_model = rf_pipeline.fit(credit_scoring_train_ddf)
+```
+
+#### Gradient Boosted Trees Classifier
+
+```python
+from pyspark.ml.classification import GBTClassifier
+
+gbt_classifier = GBTClassifier(featuresCol='features', labelCol='SeriousDlqin2yrs_idx', maxIter=10)
+gbt_pipeline = Pipeline(stages=[feature_vector_assembler, label_string_indexer, gbt_classifier])
+gbt_model = gbt_pipeline.fit(credit_scoring_train_ddf)
+```
+
+#### Logistic Regression Classifier
 
 ```python
 from pyspark.ml.classification import LogisticRegression
-from pyspark.ml.evaluation import BinaryClassificationEvaluator
-from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 
-# Split the data into training and testing sets
-train_data, test_data = df_features.randomSplit([0.8, 0.2], seed=1234)
-
-# Initialize the model
-lr = LogisticRegression(featuresCol="features", labelCol="label")
-
-# Set up hyperparameter tuning with cross-validation
-param_grid = (ParamGridBuilder()
-              .addGrid(lr.regParam, [0.1, 0.01])
-              .addGrid(lr.maxIter, [10, 20])
-              .build())
-
-evaluator = BinaryClassificationEvaluator()
-
-crossval = CrossValidator(estimator=lr,
-                          estimatorParamMaps=param_grid,
-                          evaluator=evaluator,
-                          numFolds=3)
-
-# Train the model using cross-validation
-model = crossval.fit(train_data)
+lr_classifier = LogisticRegression(featuresCol='features', labelCol='SeriousDlqin2yrs_idx', maxIter=10)
+lr_pipeline = Pipeline(stages=[feature_vector_assembler, label_string_indexer, lr_classifier])
+lr_model = lr_pipeline.fit(credit_scoring_train_ddf)
 ```
 
-**Explanation**:
+### 6. Predictions and Evaluation
 
-* The dataset is split into training and testing sets (80%/20%).
-* A Logistic Regression model is initialized, and hyperparameter tuning is performed using `CrossValidator` to select the best parameters (`regParam` and `maxIter`).
-* The model is trained using the training data.
-
-### 6. Model Evaluation
-
-Once the model is trained, we evaluate its performance on the test data.
+After training the models, we make predictions on the test data:
 
 ```python
-# Make predictions on the test data
-predictions = model.transform(test_data)
-
-# Evaluate the model using ROC-AUC score
-roc_auc = evaluator.evaluate(predictions)
-print(f"ROC-AUC: {roc_auc}")
+rf_predictions = rf_model.transform(credit_scoring_test_ddf)
+gbt_predictions = gbt_model.transform(credit_scoring_test_ddf)
+lr_predictions = lr_model.transform(credit_scoring_test_ddf)
 ```
 
-**Explanation**:
-We use the `BinaryClassificationEvaluator` to compute the ROC-AUC score, which is a common metric for evaluating classification models.
+We evaluate the models based on their ROC curves:
 
-## Dependencies
-
-* PySpark
-* pandas
-* numpy
-* scikit-learn
-
-You can install these dependencies via the following command:
-
-```bash
-pip install pyspark pandas numpy scikit-learn
+```python
+from EvaluationMetrics import bin_classif_eval
+rf_eval = bin_classif_eval(rf_predictions)
+gbt_eval = bin_classif_eval(gbt_predictions)
+lr_eval = bin_classif_eval(lr_predictions)
 ```
 
-## Usage
+### 7. Conclusion
 
-To run the pipeline, simply execute the script or load the notebook with the dataset you want to analyze. Ensure that your environment is properly set up with PySpark and the necessary dependencies.
+The model can be tuned further by adjusting hyperparameters and experimenting with different classifiers. Additionally, performance metrics such as AUC, precision, recall, and F1-score should be evaluated on the test set.
 
+---
+
+## Contributing
+
+Feel free to fork this repository, submit issues, or pull requests to improve the model.
