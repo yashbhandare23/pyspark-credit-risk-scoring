@@ -1,4 +1,4 @@
-# PySpark Credit Risk Scoring Model
+# PySpark Credit Risk Scoring Accurate Model
 
 This repository contains a PySpark-based pipeline for credit risk scoring. The model uses a variety of machine learning classifiers, including Random Forest, Gradient Boosted Trees, and Logistic Regression, to predict whether a person is at risk of serious delinquency in the next two years based on financial features. The project leverages PySpark for distributed data processing and machine learning.
 
